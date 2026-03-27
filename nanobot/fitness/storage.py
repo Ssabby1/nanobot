@@ -159,6 +159,16 @@ class FitnessRepository:
             ).fetchone()
         return self._load_profile(row)
 
+    def list_profile_ids(self) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT user_id FROM user_profiles
+                ORDER BY updated_at DESC, created_at DESC
+                """
+            ).fetchall()
+        return [str(row["user_id"]) for row in rows]
+
     def save_weekly_plan(self, plan: WeeklyPlan) -> WeeklyPlan:
         with self._connect() as conn:
             conn.execute(

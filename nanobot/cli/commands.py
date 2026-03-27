@@ -723,6 +723,12 @@ def agent(
     config = _load_runtime_config(config, workspace)
     sync_workspace_templates(config.workspace_path)
 
+    if message:
+        fitness_response = _try_fitness_short_circuit(message, config.workspace_path)
+        if fitness_response is not None:
+            _print_agent_response(fitness_response, render_markdown=markdown, metadata={"render_as": "text"})
+            return
+
     bus = MessageBus()
     provider = _make_provider(config)
 
@@ -881,6 +887,15 @@ def agent(
                             _restore_terminal()
                             console.print("\nGoodbye!")
                             break
+
+                        fitness_response = _try_fitness_short_circuit(user_input, config.workspace_path)
+                        if fitness_response is not None:
+                            await _print_interactive_response(
+                                fitness_response,
+                                render_markdown=markdown,
+                                metadata={"render_as": "text"},
+                            )
+                            continue
 
                         turn_done.clear()
                         turn_response.clear()
@@ -1160,6 +1175,22 @@ def _get_fitness_service():
     return FitnessService(config.workspace_path)
 
 
+def _get_fitness_router():
+    from nanobot.fitness import FitnessRuleRouter
+
+    return FitnessRuleRouter(_get_fitness_service())
+
+
+def _try_fitness_short_circuit(message: str, workspace: Path, user_id: str | None = None) -> str | None:
+    from nanobot.fitness import FitnessRuleRouter, FitnessService
+
+    router = FitnessRuleRouter(FitnessService(workspace))
+    decision = router.route(message.strip(), user_id=user_id or "default")
+    if not decision.action:
+        return None
+    return router.handle(message, user_id=user_id)
+
+
 def _parse_csv_items(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
@@ -1378,6 +1409,22 @@ def fitness_adjustment_show(
         console.print(f"[yellow]No adjustment suggestion found for user '{user_id}'.[/yellow]")
         raise typer.Exit(1)
     console.print(service.format_adjustment(suggestion))
+
+
+@fitness_app.command("route")
+@fitness_app.command("路由")
+def fitness_route(
+    message: str = typer.Argument(..., help="Natural language fitness request"),
+    user_id: str | None = typer.Option(None, help="User identifier"),
+):
+    """Route a natural language request to the fitness MVP."""
+    router = _get_fitness_router()
+    try:
+        result = router.handle(message, user_id=user_id)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print(result)
 
 
 _LOGIN_HANDLERS: dict[str, callable] = {}

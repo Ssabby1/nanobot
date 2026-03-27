@@ -45,6 +45,9 @@ class FitnessService:
     def get_profile(self, user_id: str = "default") -> UserProfile | None:
         return self.repo.get_profile(user_id)
 
+    def list_profile_ids(self) -> list[str]:
+        return self.repo.list_profile_ids()
+
     def generate_weekly_plan(self, user_id: str = "default", week_start_date: date | None = None) -> WeeklyPlan:
         profile = self._require_profile(user_id)
         week_start = self._normalize_week_start(week_start_date or date.today())
