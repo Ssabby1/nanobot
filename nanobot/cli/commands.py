@@ -7,6 +7,7 @@ import os
 import select
 import signal
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -1140,6 +1141,243 @@ def status():
 
 provider_app = typer.Typer(help="Manage providers")
 app.add_typer(provider_app, name="provider")
+
+
+# ============================================================================
+# Fitness MVP Commands
+# ============================================================================
+
+fitness_app = typer.Typer(help="Fitness training and nutrition MVP")
+app.add_typer(fitness_app, name="fitness")
+app.add_typer(fitness_app, name="健身")
+
+
+def _get_fitness_service():
+    from nanobot.config.loader import load_config
+    from nanobot.fitness import FitnessService
+
+    config = load_config()
+    return FitnessService(config.workspace_path)
+
+
+def _parse_csv_items(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _none_if_missing(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped if stripped else None
+
+
+@fitness_app.command("profile-set")
+@fitness_app.command("建档")
+def fitness_profile_set(
+    user_id: str = typer.Option("default", help="User identifier"),
+    gender: str = typer.Option(..., help="Gender"),
+    age: str = typer.Option(..., help="Age"),
+    height: str = typer.Option(..., help="Height in cm"),
+    weight: str = typer.Option(..., help="Weight in kg"),
+    goal: str = typer.Option(..., help="Goal"),
+    experience_level: str = typer.Option(..., help="Experience level"),
+    training_days_per_week: str = typer.Option(..., help="Training days per week"),
+    session_duration: str = typer.Option(..., help="Session duration in minutes"),
+    environment: str = typer.Option(..., help="Training environment"),
+    diet_constraint: str = typer.Option(..., help="Diet constraint"),
+    current_split: str = typer.Option("", help="Current split"),
+    weak_points: str = typer.Option("", help="Weak points"),
+    injury_notes: str = typer.Option("", help="Injury notes"),
+):
+    """Create or update a fitness profile."""
+    service = _get_fitness_service()
+    try:
+        profile = service.save_profile(
+            user_id=user_id,
+            gender=gender,
+            age=age,
+            height=height,
+            weight=weight,
+            goal=goal,
+            experience_level=experience_level,
+            training_days_per_week=training_days_per_week,
+            session_duration=session_duration,
+            environment=environment,
+            diet_constraint=diet_constraint,
+            current_split=current_split,
+            weak_points=weak_points,
+            injury_notes=injury_notes,
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print("[green]Profile saved.[/green]")
+    console.print(service.format_profile(profile))
+
+
+@fitness_app.command("profile-show")
+@fitness_app.command("查看画像")
+def fitness_profile_show(
+    user_id: str = typer.Option("default", help="User identifier"),
+):
+    """Show the saved fitness profile."""
+    service = _get_fitness_service()
+    profile = service.get_profile(user_id)
+    if not profile:
+        console.print(f"[yellow]No profile found for user '{user_id}'.[/yellow]")
+        raise typer.Exit(1)
+    console.print(service.format_profile(profile))
+
+
+@fitness_app.command("profile-update")
+@fitness_app.command("更新画像")
+def fitness_profile_update(
+    user_id: str = typer.Option(..., help="User identifier"),
+    gender: str | None = typer.Option(None, help="Gender"),
+    age: str | None = typer.Option(None, help="Age"),
+    height: str | None = typer.Option(None, help="Height in cm"),
+    weight: str | None = typer.Option(None, help="Weight in kg"),
+    goal: str | None = typer.Option(None, help="Goal"),
+    experience_level: str | None = typer.Option(None, help="Experience level"),
+    training_days_per_week: str | None = typer.Option(None, help="Training days per week"),
+    session_duration: str | None = typer.Option(None, help="Session duration in minutes"),
+    environment: str | None = typer.Option(None, help="Training environment"),
+    diet_constraint: str | None = typer.Option(None, help="Diet constraint"),
+    current_split: str | None = typer.Option(None, help="Current split"),
+    weak_points: str | None = typer.Option(None, help="Weak points"),
+    injury_notes: str | None = typer.Option(None, help="Injury notes"),
+):
+    """Partially update a saved fitness profile."""
+    service = _get_fitness_service()
+    update_data = {
+        "gender": _none_if_missing(gender),
+        "age": _none_if_missing(age),
+        "height": _none_if_missing(height),
+        "weight": _none_if_missing(weight),
+        "goal": _none_if_missing(goal),
+        "experience_level": _none_if_missing(experience_level),
+        "training_days_per_week": _none_if_missing(training_days_per_week),
+        "session_duration": _none_if_missing(session_duration),
+        "environment": _none_if_missing(environment),
+        "diet_constraint": _none_if_missing(diet_constraint),
+        "current_split": current_split,
+        "weak_points": weak_points,
+        "injury_notes": injury_notes,
+    }
+    try:
+        profile = service.update_profile(user_id=user_id, **update_data)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print("[green]Profile updated.[/green]")
+    console.print(service.format_profile(profile))
+
+
+@fitness_app.command("plan-generate")
+@fitness_app.command("生成计划")
+def fitness_plan_generate(
+    user_id: str = typer.Option("default", help="User identifier"),
+    week_start: str | None = typer.Option(None, help="Any date within the target week, YYYY-MM-DD"),
+):
+    """Generate the weekly training plan."""
+    service = _get_fitness_service()
+    try:
+        parsed_week = date.fromisoformat(week_start) if week_start else None
+        plan = service.generate_weekly_plan(user_id=user_id, week_start_date=parsed_week)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print("[green]Weekly plan generated.[/green]")
+    console.print(service.format_plan(plan))
+
+
+@fitness_app.command("plan-show")
+@fitness_app.command("查看计划")
+def fitness_plan_show(
+    user_id: str = typer.Option("default", help="User identifier"),
+):
+    """Show the latest weekly plan."""
+    service = _get_fitness_service()
+    plan = service.get_latest_plan(user_id)
+    if not plan:
+        console.print(f"[yellow]No weekly plan found for user '{user_id}'.[/yellow]")
+        raise typer.Exit(1)
+    console.print(service.format_plan(plan))
+
+
+@fitness_app.command("feedback-add")
+@fitness_app.command("打卡")
+def fitness_feedback_add(
+    user_id: str = typer.Option("default", help="User identifier"),
+    feedback_date: str = typer.Option(date.today().isoformat(), "--date", help="Feedback date YYYY-MM-DD"),
+    trained_today: bool = typer.Option(True, "--trained/--not-trained", help="Whether the user trained today"),
+    completed_exercises: str = typer.Option("", help="Comma-separated exercises"),
+    completion_rate: str = typer.Option(..., help="Completion rate between 0 and 1"),
+    fatigue_level: str = typer.Option(..., help="Fatigue level 1-5"),
+    soreness_notes: str = typer.Option("", help="Soreness notes"),
+    diet_adherence: str = typer.Option(..., help="Diet adherence"),
+    extra_notes: str = typer.Option("", help="Extra notes"),
+):
+    """Record daily training feedback."""
+    service = _get_fitness_service()
+    try:
+        feedback = service.record_feedback(
+            user_id=user_id,
+            feedback_date=date.fromisoformat(feedback_date),
+            trained_today=trained_today,
+            completed_exercises=_parse_csv_items(completed_exercises),
+            completion_rate=completion_rate,
+            fatigue_level=fatigue_level,
+            soreness_notes=soreness_notes,
+            diet_adherence=diet_adherence,
+            extra_notes=extra_notes,
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]Feedback saved.[/green] {feedback.date.isoformat()} / fatigue {feedback.fatigue_level}/5")
+
+
+@fitness_app.command("feedback-show")
+@fitness_app.command("查看打卡")
+def fitness_feedback_show(
+    user_id: str = typer.Option("default", help="User identifier"),
+    limit: int = typer.Option(7, help="Number of records"),
+):
+    """Show recent feedback records."""
+    service = _get_fitness_service()
+    console.print(service.format_feedback(service.list_feedback(user_id, limit=limit)))
+
+
+@fitness_app.command("adjustment-generate")
+@fitness_app.command("生成建议")
+def fitness_adjustment_generate(
+    user_id: str = typer.Option("default", help="User identifier"),
+    lookback_days: int = typer.Option(7, help="Recent feedback count used for adjustment"),
+):
+    """Generate a rule-based adjustment suggestion."""
+    service = _get_fitness_service()
+    try:
+        suggestion = service.generate_adjustment(user_id=user_id, lookback_days=lookback_days)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print("[green]Adjustment suggestion generated.[/green]")
+    console.print(service.format_adjustment(suggestion))
+
+
+@fitness_app.command("adjustment-show")
+@fitness_app.command("查看建议")
+def fitness_adjustment_show(
+    user_id: str = typer.Option("default", help="User identifier"),
+):
+    """Show the latest adjustment suggestion."""
+    service = _get_fitness_service()
+    suggestion = service.get_latest_adjustment(user_id)
+    if not suggestion:
+        console.print(f"[yellow]No adjustment suggestion found for user '{user_id}'.[/yellow]")
+        raise typer.Exit(1)
+    console.print(service.format_adjustment(suggestion))
 
 
 _LOGIN_HANDLERS: dict[str, callable] = {}
