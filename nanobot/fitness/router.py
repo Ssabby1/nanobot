@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +41,72 @@ FIELD_LABELS = {
     "diet_adherence": "\u996e\u98df\u8fbe\u6807\u60c5\u51b5",
 }
 
+FOLLOWUP_FIELD_LIMIT = 2
+
+ACTION_FIELD_PRIORITIES = {
+    "save_profile": [
+        "weight",
+        "experience_level",
+        "training_days_per_week",
+        "session_duration",
+        "environment",
+        "diet_constraint",
+        "goal",
+        "gender",
+        "age",
+        "height",
+    ],
+    "update_profile": [
+        "weight",
+        "goal",
+        "experience_level",
+        "training_days_per_week",
+        "session_duration",
+        "environment",
+        "diet_constraint",
+        "gender",
+        "age",
+        "height",
+    ],
+    "record_feedback": [
+        "completion_rate",
+        "fatigue_level",
+        "diet_adherence",
+    ],
+}
+
+FIELD_REPLY_EXAMPLES = {
+    "weight": "\u4f53\u91cd140\u65a4",
+    "experience_level": "\u7ec3\u4e86\u4e94\u5e74",
+    "training_days_per_week": "\u6bcf\u5468\u7ec34\u6b21",
+    "session_duration": "\u6bcf\u6b2160\u5206\u949f",
+    "environment": "\u5065\u8eab\u623f\u8bad\u7ec3",
+    "diet_constraint": "\u81ea\u5df1\u505a\u996d",
+    "goal": "\u76ee\u6807\u51cf\u8102",
+    "gender": "\u7537",
+    "age": "23\u5c81",
+    "height": "176cm",
+    "completion_rate": "\u5b8c\u6210\u5ea680%",
+    "fatigue_level": "\u6709\u70b9\u7d2f",
+    "diet_adherence": "\u996e\u98df\u8fd8\u884c",
+}
+
+FIELD_QUESTION_PROMPTS = {
+    "gender": "\u4f60\u662f\u7537\u751f\u8fd8\u662f\u5973\u751f\uff1f",
+    "age": "\u4f60\u4eca\u5e74\u591a\u5927\uff1f",
+    "height": "\u4f60\u8eab\u9ad8\u5927\u6982\u591a\u5c11\uff1f",
+    "weight": "\u4f60\u73b0\u5728\u4f53\u91cd\u5927\u6982\u591a\u5c11\uff1f",
+    "goal": "\u4f60\u8fd9\u6b21\u66f4\u504f\u5411\u51cf\u8102\uff0c\u589e\u808c\uff0c\u8fd8\u662f\u4fdd\u6301\u4f53\u80fd\uff1f",
+    "experience_level": "\u4f60\u5e73\u65f6\u8bad\u7ec3\u5927\u6982\u662f\u65b0\u624b\uff0c\u521d\u7ea7\uff0c\u8fd8\u662f\u5df2\u7ecf\u7ec3\u4e86\u51e0\u5e74\uff1f",
+    "training_days_per_week": "\u4f60\u73b0\u5728\u4e00\u822c\u6bcf\u5468\u80fd\u7ec3\u51e0\u5929\uff1f",
+    "session_duration": "\u4f60\u6bcf\u6b21\u8bad\u7ec3\u5927\u6982\u80fd\u62ff\u51fa\u591a\u5c11\u65f6\u95f4\uff1f",
+    "environment": "\u4f60\u4e3b\u8981\u662f\u5728\u5bb6\u7ec3\uff0c\u5065\u8eab\u623f\u7ec3\uff0c\u8fd8\u662f\u5176\u4ed6\u73af\u5883\uff1f",
+    "diet_constraint": "\u4f60\u5e73\u65f6\u5403\u996d\u66f4\u63a5\u8fd1\u81ea\u5df1\u505a\uff0c\u5916\u5356\u4e3a\u4e3b\uff0c\u8fd8\u662f\u6709\u5176\u4ed6\u996e\u98df\u9650\u5236\uff1f",
+    "completion_rate": "\u4eca\u5929\u8fd9\u6b21\u8bad\u7ec3\u5927\u6982\u5b8c\u6210\u4e86\u591a\u5c11\uff1f",
+    "fatigue_level": "\u7ec3\u5b8c\u6216\u8005\u4eca\u5929\u6574\u4f53\u611f\u89c9\u7d2f\u4e0d\u7d2f\uff1f",
+    "diet_adherence": "\u4eca\u5929\u996e\u98df\u5927\u6982\u8fbe\u6807\u4e86\u5417\uff1f",
+}
+
 
 @dataclass
 class RouteDecision:
@@ -50,6 +116,9 @@ class RouteDecision:
     params: dict[str, Any] = field(default_factory=dict)
     missing_fields: list[str] = field(default_factory=list)
     reason: str = ""
+    stateful: bool = False
+    user_id_override: str | None = None
+    followup_turn: int = 0
 
 
 class FitnessRuleRouter:
@@ -69,6 +138,17 @@ class FitnessRuleRouter:
             )
 
         resolved_user_id = self.infer_user_id(clean, explicit_user_id=user_id)
+        pending = self._continue_pending_route(clean, resolved_user_id)
+        if pending:
+            effective_user_id = pending.user_id_override or resolved_user_id
+            if pending.missing_fields:
+                self._save_pending_route(pending, effective_user_id)
+                return self._format_missing_message(pending)
+            result = self.execute(pending, user_id=effective_user_id)
+            self._clear_pending_route()
+            self._save_last_user_id(effective_user_id)
+            return result
+
         decision = self.route(clean, user_id=resolved_user_id)
         if not decision.action:
             return (
@@ -79,13 +159,11 @@ class FitnessRuleRouter:
                 "\u751f\u6210/\u67e5\u770b\u5efa\u8bae\u3002"
             )
         if decision.missing_fields:
-            missing = "\u3001".join(FIELD_LABELS.get(field, field) for field in decision.missing_fields)
-            return (
-                f"\u5df2\u8bc6\u522b\u4e3a\u201c{decision.reason}\u201d\uff0c"
-                f"\u4f46\u8fd8\u7f3a\u5c11\u8fd9\u4e9b\u4fe1\u606f\uff1a{missing}\u3002"
-            )
+            self._save_pending_route(decision, resolved_user_id)
+            return self._format_missing_message(decision)
 
         result = self.execute(decision, user_id=resolved_user_id)
+        self._clear_pending_route()
         self._save_last_user_id(resolved_user_id)
         return result
 
@@ -149,6 +227,7 @@ class FitnessRuleRouter:
                 params=params,
                 missing_fields=missing,
                 reason="\u6253\u5361",
+                stateful=True,
             )
 
         if self._is_show_plan_request(lower):
@@ -179,9 +258,73 @@ class FitnessRuleRouter:
                 params=params,
                 missing_fields=missing,
                 reason="\u5efa\u6863",
+                stateful=True,
+            )
+
+        inferred_profile = self._extract_profile_params(text)
+        has_profile_intro = any(token in text for token in ("\u6211\u53eb", "\u6211\u7684\u540d\u5b57\u662f", "\u53eb\u6211"))
+        if len(inferred_profile) >= 4 or (has_profile_intro and len(inferred_profile) >= 3):
+            missing = [field for field in PROFILE_REQUIRED_FIELDS if inferred_profile.get(field) in (None, "")]
+            return RouteDecision(
+                action="save_profile",
+                params=inferred_profile,
+                missing_fields=missing,
+                reason="\u5efa\u6863",
+                stateful=True,
             )
 
         return RouteDecision(action=None)
+
+    def _continue_pending_route(self, text: str, user_id: str) -> RouteDecision | None:
+        state = self._load_state()
+        pending = state.get("pending_route")
+        if not isinstance(pending, dict):
+            return None
+
+        action = pending.get("action")
+        if action not in {"save_profile", "update_profile", "record_feedback"}:
+            return None
+
+        pending_user_id = str(pending.get("user_id", "")).strip() or user_id
+        if user_id not in {"default", pending_user_id} and pending_user_id != user_id:
+            return None
+
+        current = self.route(text, user_id=user_id)
+        if current.action and current.action != action:
+            return None
+
+        if action == "record_feedback":
+            new_params = self._extract_feedback_params(text)
+        else:
+            new_params = self._extract_profile_params(text)
+        if not new_params and current.action != action:
+            return None
+
+        merged = dict(pending.get("params", {}))
+        merged.update(new_params)
+        if action == "record_feedback":
+            missing = [
+                field
+                for field in ("completion_rate", "fatigue_level", "diet_adherence")
+                if merged.get(field) in (None, "")
+            ]
+        else:
+            missing = [field for field in PROFILE_REQUIRED_FIELDS if merged.get(field) in (None, "")]
+        return RouteDecision(
+            action=action,
+            params=merged,
+            missing_fields=missing if action in {"save_profile", "record_feedback"} else [],
+            reason=(
+                "\u8865\u5145\u5efa\u6863\u4fe1\u606f"
+                if action == "save_profile"
+                else "\u8865\u5145\u6253\u5361\u4fe1\u606f"
+                if action == "record_feedback"
+                else "\u8865\u5145\u66f4\u65b0\u4fe1\u606f"
+            ),
+            stateful=True,
+            user_id_override=pending_user_id,
+            followup_turn=int(pending.get("followup_turn", 0)) + 1,
+        )
 
     def execute(self, decision: RouteDecision, user_id: str = "default") -> str:
         params = dict(decision.params)
@@ -368,7 +511,9 @@ class FitnessRuleRouter:
             params["height"] = match.group(1)
         if match := re.search("(\\d{2,3}(?:\\.\\d+)?)\\s*(?:kg|\u516c\u65a4)", text, flags=re.IGNORECASE):
             params["weight"] = match.group(1)
-        if match := re.search("\u6bcf\u5468\\s*(\\d(?:\\s*-\\s*\\d)?)\\s*\u6b21", text):
+        elif match := re.search("(\\d{2,3}(?:\\.\\d+)?)\\s*\u65a4", text):
+            params["weight"] = str(round(float(match.group(1)) / 2, 1))
+        if match := re.search("\u6bcf\u5468(?:\u8bad\u7ec3|\u7ec3)?\\s*(\\d(?:\\s*-\\s*\\d)?)\\s*\u6b21", text):
             params["training_days_per_week"] = match.group(1).replace(" ", "")
         if match := re.search("\u6bcf\u6b21\\s*(\\d{2,3}(?:\\s*-\\s*\\d{2,3})?)\\s*\u5206\u949f", text):
             params["session_duration"] = match.group(1).replace(" ", "")
@@ -388,20 +533,30 @@ class FitnessRuleRouter:
                 params["goal"] = raw
                 break
 
-        for raw in (
-            "\u65b0\u624b",
-            "\u521d\u7ea7",
-            "\u4e2d\u7ea7",
-            "\u96f6\u57fa\u7840",
-            "\u7cfb\u7edf\u5065\u8eab\u4e09\u4e2a\u6708",
-            "\u7ec3\u4e86\u4e00\u5e74",
-        ):
+        experience_aliases = (
+            ("\u65b0\u624b", "\u65b0\u624b"),
+            ("\u521d\u7ea7", "\u521d\u7ea7"),
+            ("\u4e2d\u7ea7", "\u4e2d\u7ea7"),
+            ("\u8001\u624b", "\u4e2d\u7ea7"),
+            ("\u8001\u9e1f", "\u4e2d\u7ea7"),
+            ("\u6709\u7ecf\u9a8c", "\u4e2d\u7ea7"),
+            ("\u96f6\u57fa\u7840", "\u65b0\u624b"),
+            ("\u7cfb\u7edf\u5065\u8eab\u4e09\u4e2a\u6708", "\u521d\u7ea7"),
+            ("\u7ec3\u4e86\u4e00\u5e74", "\u4e2d\u7ea7"),
+        )
+        for raw, normalized in experience_aliases:
             if raw in text:
-                params["experience_level"] = raw
+                params["experience_level"] = normalized
                 break
+        if "experience_level" not in params:
+            if re.search("(?:\u7ec3|\u9501\u70bc|\u5065\u8eab).{0,4}(\\d+)\\s*\u5e74", text):
+                params["experience_level"] = "\u4e2d\u7ea7"
+            elif "\u4e94\u5e74" in text or "\u591a\u5e74" in text:
+                params["experience_level"] = "\u4e2d\u7ea7"
 
         for raw in (
             "\u5546\u4e1a\u5065\u8eab\u623f",
+            "\u5065\u8eab\u623f",
             "\u6821\u56ed\u5065\u8eab\u623f",
             "\u5b66\u6821\u5065\u8eab\u623f",
             "\u5b66\u6821",
@@ -420,6 +575,9 @@ class FitnessRuleRouter:
             "\u5916\u5356\u4e3a\u4e3b",
             "\u5916\u5356",
             "\u81ea\u5df1\u505a\u996d",
+            "\u5728\u5bb6\u505a\u996d",
+            "\u5bb6\u91cc\u505a\u996d",
+            "\u81ea\u5df1\u5728\u5bb6\u505a\u996d",
             "\u81ea\u5df1\u4e0b\u53a8",
             "\u5fcc\u53e3",
             "\u65e0",
@@ -470,6 +628,7 @@ class FitnessRuleRouter:
             )
         ):
             params["trained_today"] = False
+            params["completion_rate"] = 0.0
 
         if match := re.search("(?:\u5b8c\u6210\u5ea6|\u5b8c\u6210\u4e86|\u505a\u5230\u4e86)\\s*[:\uff1a ]?(\\d+(?:\\.\\d+)?%?)", text):
             params["completion_rate"] = match.group(1)
@@ -537,11 +696,200 @@ class FitnessRuleRouter:
             cleaned.append(item)
         return cleaned
 
-    def _load_last_user_id(self) -> str | None:
+    def _format_missing_message(self, decision: RouteDecision) -> str:
+        missing_labels = [FIELD_LABELS.get(field, field) for field in decision.missing_fields]
+        all_missing = "\u3001".join(missing_labels)
+        focus_fields = self._pick_focus_missing_fields(
+            decision.action,
+            decision.missing_fields,
+            decision.params,
+        )
+        lead = self._build_followup_lead(decision, focus_fields)
+        question = self._build_followup_question(decision.action, focus_fields, decision.params)
+        example = self._build_followup_example(focus_fields)
+
+        if len(decision.missing_fields) <= FOLLOWUP_FIELD_LIMIT:
+            return (
+                f"{lead}\n"
+                f"\u8fd8\u5dee {all_missing} \u8fd9\u4e9b\u4fe1\u606f\u3002\n"
+                f"{question}\n"
+                f"\u4f60\u76f4\u63a5\u8865\u5145\u5c31\u884c\uff0c\u6bd4\u5982\uff1a{example}"
+            )
+
+        rest_fields = [field for field in decision.missing_fields if field not in focus_fields]
+        rest_labels = "\u3001".join(FIELD_LABELS.get(field, field) for field in rest_fields)
+        return (
+            f"{lead}\n"
+            f"{question}\n"
+            f"\u4f60\u53ef\u4ee5\u76f4\u63a5\u8fd9\u6837\u56de\uff1a{example}\n"
+            f"\u5176\u4ed6\u8fd8\u7f3a\uff1a{rest_labels}\uff0c\u540e\u9762\u53ef\u4ee5\u63a5\u7740\u8865\u3002"
+        )
+
+    def _pick_focus_missing_fields(
+        self,
+        action: str | None,
+        missing_fields: list[str],
+        params: dict[str, Any] | None = None,
+    ) -> list[str]:
+        params = params or {}
+        adaptive = self._pick_adaptive_focus_fields(action, missing_fields, params)
+        if adaptive:
+            return adaptive[:FOLLOWUP_FIELD_LIMIT]
+
+        priorities = ACTION_FIELD_PRIORITIES.get(action or "", [])
+        ordered: list[str] = []
+        for field in priorities:
+            if field in missing_fields and field not in ordered:
+                ordered.append(field)
+        for field in missing_fields:
+            if field not in ordered:
+                ordered.append(field)
+        return ordered[:FOLLOWUP_FIELD_LIMIT]
+
+    def _pick_adaptive_focus_fields(
+        self,
+        action: str | None,
+        missing_fields: list[str],
+        params: dict[str, Any],
+    ) -> list[str]:
+        if not missing_fields:
+            return []
+
+        if action == "save_profile":
+            basics_missing = [f for f in ("weight", "height", "age", "gender", "goal") if f in missing_fields]
+            schedule_missing = [f for f in ("experience_level", "training_days_per_week", "session_duration") if f in missing_fields]
+            context_missing = [f for f in ("environment", "diet_constraint") if f in missing_fields]
+
+            if "goal" in missing_fields and "weight" in missing_fields:
+                return ["weight", "goal"]
+            if basics_missing and not any(params.get(k) in (None, "") for k in ("gender", "age", "height")):
+                return basics_missing[:FOLLOWUP_FIELD_LIMIT]
+            if schedule_missing and {"gender", "age", "height", "weight", "goal"}.issubset(set(params.keys())):
+                return schedule_missing[:FOLLOWUP_FIELD_LIMIT]
+            if context_missing and not basics_missing and not schedule_missing:
+                return context_missing[:FOLLOWUP_FIELD_LIMIT]
+
+        if action == "record_feedback":
+            if params.get("trained_today") is False:
+                preferred = [f for f in ("fatigue_level", "diet_adherence") if f in missing_fields]
+                if preferred:
+                    return preferred
+            return [f for f in ("completion_rate", "fatigue_level", "diet_adherence") if f in missing_fields]
+
+        return []
+
+    def _build_followup_example(self, fields: list[str]) -> str:
+        parts = [FIELD_REPLY_EXAMPLES.get(field, f"{FIELD_LABELS.get(field, field)}...") for field in fields]
+        return "\uff0c".join(parts)
+
+    def _build_followup_lead(self, decision: RouteDecision, focus_fields: list[str]) -> str:
+        action = decision.action or ""
+        params = decision.params or {}
+        followup_turn = max(decision.followup_turn, 0)
+
+        if followup_turn >= 1:
+            if action == "save_profile":
+                return "\u6211\u4eec\u63a5\u7740\u628a\u5269\u4e0b\u7684\u8865\u5b8c\uff0c\u8fd9\u6b21\u5148\u786e\u8ba4\u4e24\u4e2a\u5173\u952e\u7684\u3002"
+            if action == "update_profile":
+                return "\u521a\u624d\u90a3\u6bb5\u6211\u63a5\u4f4f\u4e86\uff0c\u6211\u4eec\u7ee7\u7eed\u628a\u8fd9\u6b21\u66f4\u65b0\u8865\u5b8c\u3002"
+            if action == "record_feedback":
+                if params.get("trained_today") is False:
+                    return "\u4f11\u606f\u65e5\u8fd9\u5757\u6211\u5df2\u7ecf\u8ddf\u4e0a\u4e86\uff0c\u518d\u8865\u4e24\u4e2a\u72b6\u6001\u4fe1\u606f\u5c31\u884c\u3002"
+                return "\u8fd9\u6b21\u6253\u5361\u6211\u63a5\u7740\u5e2e\u4f60\u8865\uff0c\u518d\u786e\u8ba4\u4e24\u4e2a\u70b9\u5c31\u80fd\u8bb0\u4e0b\u6765\u3002"
+
+        if action == "save_profile":
+            if {"gender", "age", "height"}.issubset(set(params.keys())):
+                return "\u57fa\u7840\u4fe1\u606f\u6211\u5148\u8bb0\u4e0b\u4e86\uff0c\u518d\u8865\u4e24\u4e2a\u5173\u952e\u7684\u5c31\u80fd\u7ee7\u7eed\u3002"
+            return "\u5df2\u7ecf\u5f00\u59cb\u7ed9\u4f60\u5efa\u6863\u4e86\uff0c\u6211\u5148\u95ee\u4f60\u4e24\u4e2a\u5173\u952e\u7684\u3002"
+
+        if action == "update_profile":
+            if params:
+                return "\u4f60\u8fd9\u6b21\u60f3\u8c03\u6574\u7684\u65b9\u5411\u6211\u5927\u6982\u660e\u767d\u4e86\uff0c\u518d\u786e\u8ba4\u4e24\u4e2a\u70b9\u5c31\u884c\u3002"
+            return "\u6211\u5148\u5e2e\u4f60\u628a\u8fd9\u6b21\u66f4\u65b0\u7406\u987a\uff0c\u5148\u786e\u8ba4\u4e24\u4e2a\u5173\u952e\u4fe1\u606f\u3002"
+
+        if action == "record_feedback":
+            if params.get("trained_today") is False:
+                return "\u4f11\u606f\u65e5\u4e5f\u53ef\u4ee5\u8bb0\u4e00\u4e0b\u72b6\u6001\uff0c\u6211\u5148\u95ee\u4f60\u4e24\u4e2a\u6700\u5173\u952e\u7684\u3002"
+            if params.get("completed_exercises"):
+                return "\u4eca\u5929\u7ec3\u4e86\u4ec0\u4e48\u6211\u8bb0\u4f4f\u4e86\uff0c\u518d\u8865\u4e24\u4e2a\u611f\u53d7\u7c7b\u4fe1\u606f\u5c31\u884c\u3002"
+            return "\u8fd9\u6b21\u6253\u5361\u6211\u5148\u63a5\u4f4f\u4e86\uff0c\u518d\u8865\u4e24\u4e2a\u5173\u952e\u4fe1\u606f\u5c31\u80fd\u8bb0\u4e0b\u6765\u3002"
+
+        focus_labels = "\u3001".join(FIELD_LABELS.get(field, field) for field in focus_fields)
+        return f"\u5df2\u8bc6\u522b\u4e3a\u201c{decision.reason}\u201d\uff0c\u6211\u5148\u786e\u8ba4 {focus_labels} \u3002"
+
+    def _build_followup_question(
+        self,
+        action: str | None,
+        fields: list[str],
+        params: dict[str, Any] | None = None,
+    ) -> str:
+        fields = [field for field in fields if field in FIELD_LABELS]
+        if not fields:
+            return "\u4f60\u76f4\u63a5\u628a\u8fd8\u7f3a\u7684\u4fe1\u606f\u8865\u5145\u4e00\u4e0b\u5c31\u884c\u3002"
+
+        pair = tuple(fields[:2])
+        pair_templates = {
+            ("weight", "goal"): "\u4f60\u73b0\u5728\u4f53\u91cd\u5927\u6982\u591a\u5c11\uff1f\u53e6\u5916\u4f60\u8fd9\u6b21\u66f4\u504f\u5411\u51cf\u8102\u8fd8\u662f\u589e\u808c\uff1f",
+            ("weight", "experience_level"): "\u4f60\u73b0\u5728\u4f53\u91cd\u5927\u6982\u591a\u5c11\uff1f\u53e6\u5916\u4f60\u5e73\u65f6\u8bad\u7ec3\u5927\u6982\u5728\u4ec0\u4e48\u9636\u6bb5\uff1f",
+            ("training_days_per_week", "session_duration"): "\u4f60\u73b0\u5728\u4e00\u822c\u6bcf\u5468\u80fd\u7ec3\u51e0\u5929\uff1f\u6bcf\u6b21\u5927\u6982\u80fd\u7ec3\u591a\u4e45\uff1f",
+            ("environment", "diet_constraint"): "\u4f60\u73b0\u5728\u4e3b\u8981\u662f\u5728\u54ea\u91cc\u8bad\u7ec3\uff1f\u996e\u98df\u4e0a\u66f4\u63a5\u8fd1\u81ea\u5df1\u505a\u8fd8\u662f\u5916\u5356\u4e3a\u4e3b\uff1f",
+            ("completion_rate", "fatigue_level"): "\u4eca\u5929\u8fd9\u6b21\u8bad\u7ec3\u5927\u6982\u5b8c\u6210\u4e86\u591a\u5c11\uff1f\u7ec3\u5b8c\u611f\u89c9\u7d2f\u4e0d\u7d2f\uff1f",
+            ("fatigue_level", "diet_adherence"): "\u4eca\u5929\u6574\u4f53\u72b6\u6001\u611f\u89c9\u7d2f\u4e0d\u7d2f\uff1f\u996e\u98df\u5927\u6982\u8fbe\u6807\u4e86\u5417\uff1f",
+        }
+        if pair in pair_templates:
+            return pair_templates[pair]
+
+        prompts = [FIELD_QUESTION_PROMPTS.get(field, f"\u8bf7\u8865\u5145{FIELD_LABELS.get(field, field)}\u3002") for field in fields[:2]]
+        if len(prompts) == 1:
+            return prompts[0]
+        return "\u53e6\u5916\uff0c".join((prompts[0], prompts[1]))
+
+    def _load_state(self) -> dict[str, Any]:
         try:
             if not self.state_path.exists():
-                return None
+                return {}
             data = json.loads(self.state_path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _save_state(self, data: dict[str, Any]) -> None:
+        self.state_path.write_text(
+            json.dumps(self._to_json_safe(data), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _save_pending_route(self, decision: RouteDecision, user_id: str) -> None:
+        if not decision.action or decision.action not in {"save_profile", "update_profile", "record_feedback"}:
+            return
+        state = self._load_state()
+        state["pending_route"] = {
+            "action": decision.action,
+            "user_id": user_id,
+            "params": decision.params,
+            "followup_turn": decision.followup_turn,
+        }
+        self._save_state(state)
+
+    def _clear_pending_route(self) -> None:
+        state = self._load_state()
+        if "pending_route" in state:
+            state.pop("pending_route", None)
+            self._save_state(state)
+
+    @staticmethod
+    def _to_json_safe(value: Any) -> Any:
+        if isinstance(value, (date, datetime)):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {k: FitnessRuleRouter._to_json_safe(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [FitnessRuleRouter._to_json_safe(item) for item in value]
+        return value
+
+    def _load_last_user_id(self) -> str | None:
+        try:
+            data = self._load_state()
             user_id = str(data.get("last_user_id", "")).strip()
             return user_id or None
         except Exception:
@@ -550,7 +898,6 @@ class FitnessRuleRouter:
     def _save_last_user_id(self, user_id: str) -> None:
         if not user_id or user_id == "default":
             return
-        self.state_path.write_text(
-            json.dumps({"last_user_id": user_id}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        state = self._load_state()
+        state["last_user_id"] = user_id
+        self._save_state(state)

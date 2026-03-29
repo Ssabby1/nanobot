@@ -724,7 +724,12 @@ def agent(
     sync_workspace_templates(config.workspace_path)
 
     if message:
-        fitness_response = _try_fitness_short_circuit(message, config.workspace_path)
+        fitness_response = _try_fitness_short_circuit(
+            message,
+            config.workspace_path,
+            provider_factory=lambda: _make_provider(config),
+            model=config.agents.defaults.model,
+        )
         if fitness_response is not None:
             _print_agent_response(fitness_response, render_markdown=markdown, metadata={"render_as": "text"})
             return
@@ -888,7 +893,12 @@ def agent(
                             console.print("\nGoodbye!")
                             break
 
-                        fitness_response = _try_fitness_short_circuit(user_input, config.workspace_path)
+                        fitness_response = await _try_fitness_short_circuit_async(
+                            user_input,
+                            config.workspace_path,
+                            provider=provider,
+                            model=config.agents.defaults.model,
+                        )
                         if fitness_response is not None:
                             await _print_interactive_response(
                                 fitness_response,
@@ -1181,14 +1191,65 @@ def _get_fitness_router():
     return FitnessRuleRouter(_get_fitness_service())
 
 
-def _try_fitness_short_circuit(message: str, workspace: Path, user_id: str | None = None) -> str | None:
-    from nanobot.fitness import FitnessRuleRouter, FitnessService
+async def _try_fitness_short_circuit_async(
+    message: str,
+    workspace: Path,
+    provider=None,
+    provider_factory=None,
+    model: str | None = None,
+    user_id: str | None = None,
+) -> str | None:
+    from nanobot.fitness import FitnessLLMRouter, FitnessRuleRouter, FitnessService
 
-    router = FitnessRuleRouter(FitnessService(workspace))
-    decision = router.route(message.strip(), user_id=user_id or "default")
-    if not decision.action:
-        return None
-    return router.handle(message, user_id=user_id)
+    service = FitnessService(workspace)
+    rule_router = FitnessRuleRouter(service)
+    decision = rule_router.route(message.strip(), user_id=user_id or "default")
+    if decision.action and not decision.missing_fields:
+        return rule_router.handle(message, user_id=user_id)
+
+    if provider is None and provider_factory is not None and model and (
+        not decision.action or decision.missing_fields
+    ):
+        provider = provider_factory()
+
+    if provider is not None and model:
+        llm_router = FitnessLLMRouter(
+            service=service,
+            provider=provider,
+            model=model,
+            rule_router=rule_router,
+        )
+        llm_result = await llm_router.handle(
+            message,
+            user_id=user_id,
+            fallback_rule_decision=decision if decision.action else None,
+        )
+        if llm_result is not None:
+            return llm_result
+
+    if decision.action:
+        return rule_router.handle(message, user_id=user_id)
+    return None
+
+
+def _try_fitness_short_circuit(
+    message: str,
+    workspace: Path,
+    provider=None,
+    provider_factory=None,
+    model: str | None = None,
+    user_id: str | None = None,
+) -> str | None:
+    return asyncio.run(
+        _try_fitness_short_circuit_async(
+            message=message,
+            workspace=workspace,
+            provider=provider,
+            provider_factory=provider_factory,
+            model=model,
+            user_id=user_id,
+        )
+    )
 
 
 def _parse_csv_items(value: str) -> list[str]:
@@ -1418,13 +1479,58 @@ def fitness_route(
     user_id: str | None = typer.Option(None, help="User identifier"),
 ):
     """Route a natural language request to the fitness MVP."""
-    router = _get_fitness_router()
+    config = _load_runtime_config()
     try:
-        result = router.handle(message, user_id=user_id)
+        result = _try_fitness_short_circuit(
+            message,
+            config.workspace_path,
+            provider_factory=lambda: _make_provider(config),
+            model=config.agents.defaults.model,
+            user_id=user_id,
+        )
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
+    if result is None:
+        result = (
+            "暂时没识别出你的意图。当前 fitness 路由已支持："
+            "建档、更新画像、查看画像、生成/查看计划、打卡/查看打卡、生成/查看建议。"
+        )
     console.print(result)
+
+
+@fitness_app.command("eval")
+def fitness_eval():
+    """Run the deterministic fitness routing evaluation suite."""
+    from nanobot.fitness import build_eval_summary, run_fitness_eval
+
+    config = _load_runtime_config()
+    results, report_path = run_fitness_eval(config.workspace_path)
+    summary = build_eval_summary(results)
+
+    table = Table(title="Fitness Routing Eval")
+    table.add_column("Case")
+    table.add_column("Category")
+    table.add_column("Status")
+    table.add_column("Description")
+
+    for item in results:
+        table.add_row(
+            item.case_id,
+            item.category,
+            "[green]PASS[/green]" if item.passed else "[red]FAIL[/red]",
+            item.description,
+        )
+
+    console.print(table)
+    console.print(
+        f"[cyan]Summary:[/cyan] {summary['passed']}/{summary['total']} passed "
+        f"({summary['pass_rate']}%), report: {report_path}"
+    )
+    if summary["failed"]:
+        failed_cases = ", ".join(item.case_id for item in results if not item.passed)
+        console.print(f"[yellow]Failed cases:[/yellow] {failed_cases}")
+        raise typer.Exit(1)
 
 
 _LOGIN_HANDLERS: dict[str, callable] = {}

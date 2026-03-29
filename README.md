@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
   <img src="nanobot_logo.png" alt="nanobot" width="500">
   <h1>nanobot: Ultra-Lightweight Personal AI Assistant</h1>
   <p>
@@ -1659,3 +1659,29 @@ PRs welcome! The codebase is intentionally small and readable. 🤗
 <p align="center">
   <sub>nanobot is for educational, research, and technical exchange purposes only</sub>
 </p>
+## Showcase: Fitness Agent Routing Project
+
+This repository includes a vertical fitness agent project built on top of `nanobot`. It demonstrates how to turn a general-purpose CLI agent into a structured domain workflow with deterministic execution, multi-turn continuation, and built-in evaluation.
+
+Highlights:
+
+- Rule-first, LLM-fallback routing for natural-language fitness requests
+- Structured actions for profile, weekly plan, daily feedback, and adjustment flows
+- Multi-turn slot filling with pending state continuation
+- Recent-user reuse and follow-up continuity across turns
+- Built-in deterministic evaluation cases with JSON reports
+
+Quick demo:
+
+```bash
+nanobot agent -m "我叫彭于晏，男，23岁，176cm，体重140斤，目标减脂，训练老手，已经锻炼五年了，每周练4次，每次60分钟，健身房训练，每天自己在家做饭吃"
+nanobot agent -m "我今天没练"
+nanobot agent -m "有点累，饮食还行"
+nanobot fitness eval
+```
+
+Project docs:
+
+- [Fitness Agent Overview](./docs/FITNESS_AGENT_OVERVIEW.md)
+- [Fitness Project Showcase (Chinese)](./docs/FITNESS_PROJECT_SHOWCASE_ZH.md)
+- [Fitness CLI Guide (Chinese)](./docs/FITNESS_CLI_GUIDE_ZH.md)

@@ -136,3 +136,35 @@ def test_rule_router_remembers_last_user(tmp_path):
     )
     show_profile = router.handle("\u770b\u770b\u6211\u7684\u753b\u50cf")
     assert "\u7528\u6237: sasa" in show_profile
+
+
+def test_rule_router_handles_natural_profile_phrasing(tmp_path):
+    service = FitnessService(tmp_path)
+    router = FitnessRuleRouter(service)
+
+    result = router.handle(
+        "\u6211\u53eb\u5f6d\u4e8e\u664f\uff0c\u7537\uff0c23\u5c81\uff0c176cm\uff0c\u4f53\u91cd140\u65a4\uff0c"
+        "\u76ee\u6807\u51cf\u8102\uff0c\u8bad\u7ec3\u8001\u624b\uff0c\u5df2\u7ecf\u953b\u70bc\u4e94\u5e74\u4e86\uff0c"
+        "\u6bcf\u5468\u7ec34\u6b21\uff0c\u6bcf\u6b2160\u5206\u949f\uff0c\u5065\u8eab\u623f\u8bad\u7ec3\uff0c"
+        "\u6bcf\u5929\u81ea\u5df1\u5728\u5bb6\u505a\u996d\u5403"
+    )
+
+    assert "\u5df2\u5b8c\u6210\u5efa\u6863" in result
+    assert "\u7528\u6237: \u5f6d\u4e8e\u664f" in result
+    assert "70.0kg" in result or "70kg" in result
+
+
+def test_rule_router_can_continue_pending_profile_completion(tmp_path):
+    service = FitnessService(tmp_path)
+    router = FitnessRuleRouter(service)
+
+    first = router.handle("\u6211\u53ebsasa\uff0c\u7537\uff0c23\u5c81\uff0c176cm\uff0c\u76ee\u6807\u51cf\u8102")
+    assert "\u4f53\u91cd" in first
+    assert "\u8bad\u7ec3\u7ecf\u9a8c" in first
+
+    second = router.handle(
+        "\u4f53\u91cd140\u65a4\uff0c\u8bad\u7ec3\u8001\u624b\uff0c\u6bcf\u5468\u7ec34\u6b21\uff0c"
+        "\u6bcf\u6b2160\u5206\u949f\uff0c\u5065\u8eab\u623f\u8bad\u7ec3\uff0c\u81ea\u5df1\u5728\u5bb6\u505a\u996d"
+    )
+    assert "\u5df2\u5b8c\u6210\u5efa\u6863" in second
+    assert "\u7528\u6237: sasa" in second

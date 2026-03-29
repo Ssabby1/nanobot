@@ -6,8 +6,24 @@ from typer.testing import CliRunner
 
 from nanobot.cli.commands import app
 from nanobot.config.schema import Config
+from nanobot.fitness.service import FitnessService
+from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 runner = CliRunner()
+
+
+class DummyProvider(LLMProvider):
+    def __init__(self, responses: list[LLMResponse]):
+        super().__init__()
+        self._responses = list(responses)
+
+    async def chat(self, *args, **kwargs) -> LLMResponse:
+        if self._responses:
+            return self._responses.pop(0)
+        return LLMResponse(content="", tool_calls=[])
+
+    def get_default_model(self) -> str:
+        return "test-model"
 
 
 def _save_config(config: Config, path: Path) -> None:
@@ -254,3 +270,101 @@ def test_agent_single_message_remembers_last_fitness_user(tmp_path):
         result = runner.invoke(app, ["agent", "-m", "\u7ed9\u6211\u770b\u770b\u6211\u7684\u753b\u50cf"])
         assert result.exit_code == 0
         assert "\u7528\u6237: sasa" in result.stdout
+
+
+def test_agent_single_message_handles_more_natural_profile_phrasing(tmp_path):
+    config_path = tmp_path / "instance" / "config.json"
+    workspace_path = tmp_path / "workspace"
+    config = Config()
+    config.agents.defaults.workspace = str(workspace_path)
+    _save_config(config, config_path)
+
+    with patch("nanobot.config.loader.get_config_path", lambda: config_path):
+        result = runner.invoke(
+            app,
+            [
+                "agent",
+                "-m",
+                "\u6211\u53eb\u5f6d\u4e8e\u664f\uff0c\u7537\uff0c23\u5c81\uff0c176cm\uff0c\u4f53\u91cd140\u65a4\uff0c"
+                "\u76ee\u6807\u51cf\u8102\uff0c\u8bad\u7ec3\u8001\u624b\uff0c\u5df2\u7ecf\u953b\u70bc\u4e94\u5e74\u4e86\uff0c"
+                "\u6bcf\u5468\u7ec34\u6b21\uff0c\u6bcf\u6b2160\u5206\u949f\uff0c\u5065\u8eab\u623f\u8bad\u7ec3\uff0c"
+                "\u6bcf\u5929\u81ea\u5df1\u5728\u5bb6\u505a\u996d\u5403",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "\u5df2\u5b8c\u6210\u5efa\u6863" in result.stdout
+        assert "\u7528\u6237: \u5f6d\u4e8e\u664f" in result.stdout
+
+
+def test_agent_single_message_can_fallback_to_llm_fitness_router(tmp_path):
+    config_path = tmp_path / "instance" / "config.json"
+    workspace_path = tmp_path / "workspace"
+    config = Config()
+    config.agents.defaults.workspace = str(workspace_path)
+    _save_config(config, config_path)
+
+    service = FitnessService(workspace_path)
+    service.save_profile(
+        user_id="sasa",
+        gender="男",
+        age=23,
+        height=176,
+        weight=70,
+        goal="减脂",
+        experience_level="初级",
+        training_days_per_week=4,
+        session_duration=60,
+        environment="商业健身房",
+        diet_constraint="外卖为主",
+    )
+
+    provider = DummyProvider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="fit3",
+                        name="route_fitness_request",
+                        arguments={
+                            "is_fitness_request": True,
+                            "action": "update_profile",
+                            "confidence": 0.93,
+                            "user_id": "sasa",
+                            "arguments": {
+                                "environment": "家里",
+                                "diet_constraint": "自己做饭",
+                            },
+                            "missing_fields": [],
+                            "needs_followup": False,
+                            "assistant_reply": "",
+                        },
+                    )
+                ],
+            )
+        ]
+    )
+
+    with patch("nanobot.config.loader.get_config_path", lambda: config_path), \
+         patch("nanobot.cli.commands._make_provider", lambda _config: provider):
+        result = runner.invoke(
+            app,
+            ["agent", "-m", "我叫sasa，把我的资料改成在家练，自己做饭"],
+        )
+        assert result.exit_code == 0
+        assert "已更新画像" in result.stdout
+        assert "家里 / 自己做饭" in result.stdout
+def test_fitness_eval_command_runs_and_writes_report(tmp_path):
+    config_path = tmp_path / "instance" / "config.json"
+    workspace_path = tmp_path / "workspace"
+    config = Config()
+    config.agents.defaults.workspace = str(workspace_path)
+    _save_config(config, config_path)
+
+    with patch("nanobot.config.loader.get_config_path", lambda: config_path):
+        result = runner.invoke(app, ["fitness", "eval"])
+        assert result.exit_code == 0
+        assert "Fitness Routing Eval" in result.stdout
+        assert "Summary:" in result.stdout
+        reports = list((workspace_path / "fitness_eval_reports").rglob("fitness_eval_report.json"))
+        assert reports
