@@ -156,16 +156,6 @@ nanobot fitness route "给我生成这周训练计划"
 nanobot fitness eval
 ```
 
-## 适合面试讲的点
-
-如果面试官时间不多，我会重点讲这几个工程点：
-
-- 如何把开放式聊天问题收敛成垂直场景下的结构化执行
-- 为什么采用“规则优先 + LLM 兜底”而不是纯 prompt agent
-- 如何处理多轮缺参补全和会话状态续填
-- 如何把业务执行统一收口到 service 层，降低模型不确定性
-- 如何为 Agent 项目补上 deterministic evaluation，而不是只靠手工演示
-
 ## 仓库结构
 
 ```text
