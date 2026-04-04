@@ -354,6 +354,49 @@ def test_agent_single_message_can_fallback_to_llm_fitness_router(tmp_path):
         assert result.exit_code == 0
         assert "已更新画像" in result.stdout
         assert "家里 / 自己做饭" in result.stdout
+
+
+def test_agent_followup_prefers_pending_user_over_last_user(tmp_path):
+    config_path = tmp_path / "instance" / "config.json"
+    workspace_path = tmp_path / "workspace"
+    config = Config()
+    config.agents.defaults.workspace = str(workspace_path)
+    _save_config(config, config_path)
+
+    provider = DummyProvider(
+        [
+            LLMResponse(content="", tool_calls=[]),
+            LLMResponse(content="", tool_calls=[]),
+        ]
+    )
+
+    with patch("nanobot.config.loader.get_config_path", lambda: config_path), \
+         patch("nanobot.cli.commands._make_provider", lambda _config: provider):
+        result = runner.invoke(
+            app,
+            [
+                "agent",
+                "-m",
+                "\u6211\u53eb\u5f6d\u4e8e\u664f\uff0c\u7537\uff0c23\u5c81\uff0c176cm\uff0c\u4f53\u91cd140\u65a4\uff0c"
+                "\u76ee\u6807\u51cf\u8102\uff0c\u8bad\u7ec3\u8001\u624b\uff0c\u6bcf\u5468\u7ec34\u6b21\uff0c"
+                "\u6bcf\u6b2160\u5206\u949f\uff0c\u5065\u8eab\u623f\u8bad\u7ec3\uff0c\u81ea\u5df1\u505a\u996d",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "\u7528\u6237: \u5f6d\u4e8e\u664f" in result.stdout
+
+        result = runner.invoke(app, ["agent", "-m", "\u6211\u53ebsasa\uff0c\u7537\uff0c23\u5c81\uff0c176cm"])
+        assert result.exit_code == 0
+        assert "\u4f53\u91cd" in result.stdout
+        assert "\u76ee\u6807" in result.stdout
+
+        result = runner.invoke(app, ["agent", "-m", "\u4f53\u91cd140\u65a4"])
+        assert result.exit_code == 0
+        assert "\u5df2\u5b8c\u6210\u5efa\u6863" not in result.stdout
+        assert "\u7528\u6237: \u5f6d\u4e8e\u664f" not in result.stdout
+        assert "\u76ee\u6807" in result.stdout
+
+
 def test_fitness_eval_command_runs_and_writes_report(tmp_path):
     config_path = tmp_path / "instance" / "config.json"
     workspace_path = tmp_path / "workspace"

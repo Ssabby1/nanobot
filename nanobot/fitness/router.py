@@ -196,6 +196,8 @@ class FitnessRuleRouter:
         parsed = self.resolve_user_id(text, explicit_user_id=explicit_user_id)
         if parsed != "default":
             return parsed
+        if pending_user_id := self._load_pending_user_id():
+            return pending_user_id
         if saved := self._load_last_user_id():
             return saved
         profile_ids = self.service.list_profile_ids()
@@ -891,6 +893,16 @@ class FitnessRuleRouter:
         try:
             data = self._load_state()
             user_id = str(data.get("last_user_id", "")).strip()
+            return user_id or None
+        except Exception:
+            return None
+
+    def _load_pending_user_id(self) -> str | None:
+        try:
+            pending = self._load_state().get("pending_route")
+            if not isinstance(pending, dict):
+                return None
+            user_id = str(pending.get("user_id", "")).strip()
             return user_id or None
         except Exception:
             return None
